@@ -257,3 +257,101 @@ CREATE TABLE IF NOT EXISTS t_heri_del_gate (
 );
 
 CREATE INDEX idx_del_gate_bill ON t_heri_del_gate (bill_no, round_no, gate_no);
+
+-- ============================================================================
+-- 到港与滞期提醒排期：提前几天看判据；同单多条先改定晚、同晚看到口近；
+-- 发不顺的跳过接着走下一条；册上没条目整趟跳空写“无”。
+-- ============================================================================
+
+-- 港里判据：提前量那格写几天就几天；空着按一日；写负数/说不上来的大数按空着办（不是零，也不是一年半载）。
+CREATE TABLE IF NOT EXISTS t_heri_remind_rule (
+  id BIGINT NOT NULL,
+  rule_code VARCHAR(32),
+  rule_name VARCHAR(64),
+  lead_days INT,
+  status INT DEFAULT 0,
+  del_flag INT DEFAULT 0,
+  create_by VARCHAR(64),
+  create_time DATETIME,
+  update_by VARCHAR(64),
+  update_time DATETIME,
+  remark VARCHAR(500),
+  PRIMARY KEY (id),
+  CONSTRAINT uk_remind_rule_code UNIQUE (rule_code)
+);
+
+-- 提醒条目册：往年入册的老提醒一条不减。同单多条按 (定得晚, 到口近, 册上序) 比，一天只发一条。
+CREATE TABLE IF NOT EXISTS t_heri_remind_row (
+  id BIGINT NOT NULL,
+  bill_no VARCHAR(40),
+  row_no INT,
+  ship_name VARCHAR(128),
+  due_at DATETIME,
+  lead_days INT,
+  rule_code VARCHAR(32),
+  revised_at DATETIME,
+  last_dispatch_no VARCHAR(64),
+  sent_flag INT DEFAULT 0,
+  fail_reason VARCHAR(255),
+  skip_flag INT DEFAULT 0,
+  after_cancel_flag INT DEFAULT 0,
+  status INT DEFAULT 0,
+  del_flag INT DEFAULT 0,
+  create_by VARCHAR(64),
+  create_time DATETIME,
+  update_by VARCHAR(64),
+  update_time DATETIME,
+  remark VARCHAR(500),
+  PRIMARY KEY (id),
+  CONSTRAINT uk_remind_row UNIQUE (bill_no, row_no)
+);
+
+CREATE INDEX idx_remind_row_bill ON t_heri_remind_row (bill_no);
+
+-- 真发出去的提醒：append-only，作废也留着。同一天同一条不许连发两回。
+CREATE TABLE IF NOT EXISTS t_heri_remind_dispatch (
+  id BIGINT NOT NULL,
+  dispatch_no VARCHAR(64),
+  run_no VARCHAR(64),
+  bill_no VARCHAR(40),
+  row_no INT,
+  ship_name VARCHAR(128),
+  due_at DATETIME,
+  remind_at DATETIME,
+  status INT,
+  fail_reason VARCHAR(255),
+  after_cancel_flag INT DEFAULT 0,
+  del_flag INT DEFAULT 0,
+  create_by VARCHAR(64),
+  create_time DATETIME,
+  update_by VARCHAR(64),
+  update_time DATETIME,
+  remark VARCHAR(500),
+  PRIMARY KEY (id),
+  CONSTRAINT uk_remind_dispatch_no UNIQUE (dispatch_no)
+);
+
+CREATE INDEX idx_remind_dispatch_row ON t_heri_remind_dispatch (bill_no, row_no);
+
+-- 趟头：一趟认多条要分页拉，拉到一半超时停下留一笔，续的时候接着拉。
+CREATE TABLE IF NOT EXISTS t_heri_remind_run (
+  id BIGINT NOT NULL,
+  run_no VARCHAR(64),
+  bill_nos VARCHAR(1000),
+  status INT,
+  fetched_rows INT DEFAULT 0,
+  sent_rows INT DEFAULT 0,
+  failed_rows INT DEFAULT 0,
+  skipped_rows INT DEFAULT 0,
+  empty_flag INT DEFAULT 0,
+  page_size INT,
+  last_row_id BIGINT,
+  remark VARCHAR(255),
+  del_flag INT DEFAULT 0,
+  create_by VARCHAR(64),
+  create_time DATETIME,
+  update_by VARCHAR(64),
+  update_time DATETIME,
+  PRIMARY KEY (id),
+  CONSTRAINT uk_remind_run_no UNIQUE (run_no)
+);

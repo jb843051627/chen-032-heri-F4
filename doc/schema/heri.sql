@@ -360,3 +360,104 @@ INSERT IGNORE INTO t_heri_del_grade (id, grade_code, grade_name, biz_mode, qty_m
 VALUES (1, 'DG01', '直发档', '直发', 0.00, 50.00, 3, 10, 0, 0, 'seed', NOW()),
        (2, 'DG02', '换单档', '换单', 50.00, 200.00, 2, 10, 0, 0, 'seed', NOW()),
        (3, 'DG03', '改提单档', '改提', 200.00, 1000.00, 3, 10, 0, 0, 'seed', NOW());
+
+-- ============================================================================
+-- 到港与滞期提醒排期：提前量从港里判据来，判据写几天就几天；那格空着按一日。
+-- 写负数、写一个说不上来的大数，都按空着办——不是零，也不是一年半载。
+-- ============================================================================
+
+-- 港里判据：提前量那格（lead_days）写几天就几天；空/负数/说不上来的大数都按空着办（按一日）。
+CREATE TABLE IF NOT EXISTS t_heri_remind_rule (
+  id bigint NOT NULL COMMENT '主键',
+  rule_code varchar(32) DEFAULT NULL COMMENT '判据编号',
+  rule_name varchar(64) DEFAULT NULL COMMENT '判据名称',
+  lead_days int DEFAULT NULL COMMENT '提前量(天)：判据说了算；空/负数/说不上来的大数按空着办(按一日)',
+  status int DEFAULT '0' COMMENT '判据状态 0启用 1撤下',
+  del_flag int DEFAULT '0' COMMENT '删除标记 0正常 1删除',
+  create_by varchar(64) DEFAULT NULL COMMENT '创建者',
+  create_time datetime DEFAULT NULL COMMENT '创建时间',
+  update_by varchar(64) DEFAULT NULL COMMENT '更新者',
+  update_time datetime DEFAULT NULL COMMENT '更新时间',
+  remark varchar(500) DEFAULT NULL COMMENT '备注',
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_remind_rule_code (rule_code)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='到港滞期提醒提前量判据';
+
+-- 提醒条目册：往年入册的老提醒一条不减。同一单多条，先比改定得晚的，一样晚看到口更近，
+-- 再平看册上行次；定死一条，其余不吭声，同一天不许连发两回。
+CREATE TABLE IF NOT EXISTS t_heri_remind_row (
+  id bigint NOT NULL COMMENT '主键',
+  bill_no varchar(40) DEFAULT NULL COMMENT '单据号(同一单多条提醒按它归并)',
+  row_no int DEFAULT NULL COMMENT '册上行次(次序最后看它)',
+  ship_name varchar(128) DEFAULT NULL COMMENT '船名航次',
+  due_at datetime DEFAULT NULL COMMENT '到口时刻(滞期/到港点，提前量往前挪看它)',
+  lead_days int DEFAULT NULL COMMENT '本提醒提前量(天，立册时从判据誊死)',
+  rule_code varchar(32) DEFAULT NULL COMMENT '提前量取自哪条判据(立册誊本)',
+  revised_at datetime DEFAULT NULL COMMENT '改定时刻(先改定得晚的先跑)',
+  last_dispatch_no varchar(64) DEFAULT NULL COMMENT '最近真发出去那趟的趟号',
+  sent_flag int DEFAULT '0' COMMENT '是否已发出去 0没发 1已发(已发终态，日子前挪不动它)',
+  fail_reason varchar(255) DEFAULT NULL COMMENT '发不顺缘由(它自己不顺，不是没轮到)',
+  skip_flag int DEFAULT '0' COMMENT '本趟是否跳过(发失败跳过留痕) 0否1是',
+  after_cancel_flag int DEFAULT '0' COMMENT '本趟是否接在退件后 0否1是',
+  status int DEFAULT '0' COMMENT '条目状态 0待提醒 1已提醒(终态)',
+  del_flag int DEFAULT '0' COMMENT '删除标记 恒0(往年入册的老提醒一条不减)',
+  create_by varchar(64) DEFAULT NULL COMMENT '创建者',
+  create_time datetime DEFAULT NULL COMMENT '创建时间',
+  update_by varchar(64) DEFAULT NULL COMMENT '更新者',
+  update_time datetime DEFAULT NULL COMMENT '更新时间',
+  remark varchar(500) DEFAULT NULL COMMENT '备注',
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_remind_row (bill_no, row_no) COMMENT '同单提醒行次不重',
+  KEY idx_remind_row_bill (bill_no)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='到港滞期提醒条目册';
+
+-- 真发出去的提醒流水：append-only，发失败也留一笔痕（它自己不顺，不是没轮到），谁都不许悄悄抹。
+CREATE TABLE IF NOT EXISTS t_heri_remind_dispatch (
+  id bigint NOT NULL COMMENT '主键',
+  dispatch_no varchar(64) DEFAULT NULL COMMENT '趟内发送流水号(唯一，幂等不重发)',
+  run_no varchar(64) DEFAULT NULL COMMENT '哪一趟认的(抽验倒核对趟)',
+  bill_no varchar(40) DEFAULT NULL COMMENT '单据号',
+  row_no int DEFAULT NULL COMMENT '册上行次',
+  ship_name varchar(128) DEFAULT NULL COMMENT '船名航次',
+  due_at datetime DEFAULT NULL COMMENT '到口时刻',
+  remind_at datetime DEFAULT NULL COMMENT '提醒时刻(到口往前挪提前量那一刻)',
+  status int DEFAULT NULL COMMENT '流水态 1已发 2发失败(跳过接着走下一条)',
+  fail_reason varchar(255) DEFAULT NULL COMMENT '发不顺缘由',
+  after_cancel_flag int DEFAULT '0' COMMENT '是否接着一桩退件往下走的 0否1是',
+  del_flag int DEFAULT '0' COMMENT '删除标记 恒0(流水只许追加)',
+  create_by varchar(64) DEFAULT NULL COMMENT '创建者',
+  create_time datetime DEFAULT NULL COMMENT '创建时间',
+  update_by varchar(64) DEFAULT NULL COMMENT '更新者',
+  update_time datetime DEFAULT NULL COMMENT '更新时间',
+  remark varchar(500) DEFAULT NULL COMMENT '备注',
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_remind_dispatch_no (dispatch_no),
+  KEY idx_remind_dispatch_row (bill_no, row_no)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='提醒真发流水';
+
+-- 趟头：一趟要认的条数多，按批处理走，分页拉，拉到一半超时就停下留一笔，续的时候接着拉。
+CREATE TABLE IF NOT EXISTS t_heri_remind_run (
+  id bigint NOT NULL COMMENT '主键',
+  run_no varchar(64) DEFAULT NULL COMMENT '趟号(一趟一号，续跑沿用同一趟号)',
+  bill_nos varchar(1000) DEFAULT NULL COMMENT '本趟认的那批单(逗号隔开，续跑照它)',
+  status int DEFAULT NULL COMMENT '趟态 0进行中(拉到一半超时停下) 1走完 2整趟跳空(册上压根没有)',
+  fetched_rows int DEFAULT '0' COMMENT '累计已拉条数',
+  sent_rows int DEFAULT '0' COMMENT '累计真发条数',
+  failed_rows int DEFAULT '0' COMMENT '累计发失败跳过条数',
+  skipped_rows int DEFAULT '0' COMMENT '累计没轮到(被同单先跑的占了/同天已发)条数',
+  empty_flag int DEFAULT '0' COMMENT '整趟是否跳空 0否 1是(跳空写一个字：无)',
+  page_size int DEFAULT NULL COMMENT '每页拉几条(批处理分页大小)',
+  last_row_id bigint DEFAULT NULL COMMENT '续拉游标：上一页最后一条册目主键，接着它往后拉',
+  remark varchar(255) DEFAULT NULL COMMENT '留笔(半道超时/退件接续等)',
+  del_flag int DEFAULT '0' COMMENT '删除标记 0正常 1删除',
+  create_by varchar(64) DEFAULT NULL COMMENT '创建者',
+  create_time datetime DEFAULT NULL COMMENT '创建时间',
+  update_by varchar(64) DEFAULT NULL COMMENT '更新者',
+  update_time datetime DEFAULT NULL COMMENT '更新时间',
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_remind_run_no (run_no)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='提醒排期趟头';
+
+-- 提前量判据种子：RR01 提前 3 天（在用）；负数/空判据由排期按“空着”按一日。
+INSERT IGNORE INTO t_heri_remind_rule (id, rule_code, rule_name, lead_days, status, del_flag, create_by, create_time)
+VALUES (1, 'RR01', '到港提醒：提前 3 天（在用行）', 3, 0, 0, 'seed', NOW());
