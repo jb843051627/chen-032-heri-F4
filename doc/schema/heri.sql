@@ -360,3 +360,109 @@ INSERT IGNORE INTO t_heri_del_grade (id, grade_code, grade_name, biz_mode, qty_m
 VALUES (1, 'DG01', '直发档', '直发', 0.00, 50.00, 3, 10, 0, 0, 'seed', NOW()),
        (2, 'DG02', '换单档', '换单', 50.00, 200.00, 2, 10, 0, 0, 'seed', NOW()),
        (3, 'DG03', '改提单档', '改提', 200.00, 1000.00, 3, 10, 0, 0, 'seed', NOW());
+
+-- ============================================================================
+-- 到港与滞期提醒排期：提前量港里判据说了算；同单多条只认“改定得最晚、到口最近”
+-- 那一条；日子往前挪只动还没发出去的；发不顺跳过接着走；册上没条目整趟跳空写“无”。
+-- ============================================================================
+
+-- 提醒提前量判据（港里的判据）：lead_days 写几天提前几天。
+-- 那格空着、写负数、写一个说不上来的大数，都按空着办——按一日，不是 0、也不是一年半载。
+-- 判据只对注册那一刻负责：提前量立册时誊到单册头上，往后判据改了不追老提醒（老条一条不减）。
+CREATE TABLE IF NOT EXISTS t_heri_arr_rule (
+  id bigint NOT NULL COMMENT '主键',
+  rule_code varchar(32) DEFAULT NULL COMMENT '判据编号',
+  rule_name varchar(64) DEFAULT NULL COMMENT '判据名称',
+  lead_days int DEFAULT NULL COMMENT '提前天数(空/负/大数按空着办→按一日)',
+  eff_start datetime DEFAULT NULL COMMENT '生效起始时刻',
+  eff_end datetime DEFAULT NULL COMMENT '生效截止时刻(不含)',
+  priority int DEFAULT NULL COMMENT '优先级(大数先挑)',
+  status int DEFAULT '0' COMMENT '状态 0启用 1撤下',
+  del_flag int DEFAULT '0' COMMENT '删除标记 0正常 1删除',
+  create_by varchar(64) DEFAULT NULL COMMENT '创建者',
+  create_time datetime DEFAULT NULL COMMENT '创建时间',
+  update_by varchar(64) DEFAULT NULL COMMENT '更新者',
+  update_time datetime DEFAULT NULL COMMENT '更新时间',
+  remark varchar(500) DEFAULT NULL COMMENT '备注',
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_arr_rule_code (rule_code)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='到港提醒提前量判据';
+
+-- 提醒单册（一单一册）：注册时按判据把提前天数誊死在头上，三处看法以册上这处为准；
+-- 往后判据再改，老册老提醒一条不减、不重排。
+CREATE TABLE IF NOT EXISTS t_heri_arr_bill (
+  id bigint NOT NULL COMMENT '主键',
+  bill_no varchar(40) DEFAULT NULL COMMENT '单号(册号，一单一号)',
+  ship_name varchar(128) DEFAULT NULL COMMENT '船名航次',
+  rule_code varchar(32) DEFAULT NULL COMMENT '注册时认的判据编号(誊本来源)',
+  lead_days int DEFAULT NULL COMMENT '提前天数(注册时誊死，判据改了不追老册)',
+  status int DEFAULT '0' COMMENT '册态 0在册 1已发齐',
+  total_rows int DEFAULT '0' COMMENT '入册提醒条数(往年老条一条不减)',
+  sent_rows int DEFAULT '0' COMMENT '累计发出条数',
+  fail_rows int DEFAULT '0' COMMENT '累计发不顺条数(已留痕)',
+  return_rows int DEFAULT '0' COMMENT '累计退件条数',
+  del_flag int DEFAULT '0' COMMENT '删除标记 0正常 1删除',
+  create_by varchar(64) DEFAULT NULL COMMENT '创建者',
+  create_time datetime DEFAULT NULL COMMENT '创建时间',
+  update_by varchar(64) DEFAULT NULL COMMENT '更新者',
+  update_time datetime DEFAULT NULL COMMENT '更新时间',
+  remark varchar(500) DEFAULT NULL COMMENT '备注',
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_arr_bill_no (bill_no) COMMENT '单号唯一，同单再注只照面'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='到港提醒单册';
+
+-- 提醒条目（append-only）：同一单多条提醒按“改定得晚的先；一样晚看到口更近的”认一条发，
+-- 认死那一条其余不吭声；同一天不许连发两回。日子往前挪只动还没发的，已发的留在原处。
+-- 发不顺的标发失败留痕、跳过，不堵后头；前一条退了，后一条带着“退件后续”照走。
+CREATE TABLE IF NOT EXISTS t_heri_arr_row (
+  id bigint NOT NULL COMMENT '主键',
+  bill_no varchar(40) DEFAULT NULL COMMENT '单号',
+  item_no varchar(64) DEFAULT NULL COMMENT '条目编号(同单内唯一)',
+  due_at datetime DEFAULT NULL COMMENT '到口(到港/滞期)时刻',
+  remind_at datetime DEFAULT NULL COMMENT '排定提醒时刻=到口往前挪提前量',
+  lead_days int DEFAULT NULL COMMENT '本条提前量(册上誊本)',
+  revised_at datetime DEFAULT NULL COMMENT '改定时刻(认条先比它：晚的先)',
+  notify_type varchar(128) DEFAULT NULL COMMENT '提醒方式(只记不判)',
+  amount decimal(14,2) DEFAULT NULL COMMENT '滞期费(元)',
+  ship_name varchar(128) DEFAULT NULL COMMENT '船名航次',
+  status int DEFAULT NULL COMMENT '0待发 1已发 2发不顺(留痕跳过) 3已退回',
+  send_time datetime DEFAULT NULL COMMENT '真正发出时刻',
+  fail_reason varchar(255) DEFAULT NULL COMMENT '发不顺/退件缘由留痕',
+  after_return int DEFAULT '0' COMMENT '本条是不是接着一桩退件往下走的 0否1是',
+  del_flag int DEFAULT '0' COMMENT '删除标记 恒0(条目只许追加，老条一条不减)',
+  create_by varchar(64) DEFAULT NULL COMMENT '创建者',
+  create_time datetime DEFAULT NULL COMMENT '创建时间',
+  update_by varchar(64) DEFAULT NULL COMMENT '更新者',
+  update_time datetime DEFAULT NULL COMMENT '更新时间',
+  remark varchar(500) DEFAULT NULL COMMENT '备注',
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_arr_row_no (bill_no, item_no) COMMENT '同单条目号不重，认条/退件都认它'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='到港提醒条目';
+
+-- 一趟派发：认条目按批分页拉，拉到一半超时停下留一笔，续的时候接着拉（断点续拉）；
+-- 册上压根没条目整趟跳空，result_text 就写一个字“无”，不许拿别的单顶替、也不许顺手造条。
+CREATE TABLE IF NOT EXISTS t_heri_arr_run (
+  id bigint NOT NULL COMMENT '主键',
+  run_no varchar(40) DEFAULT NULL COMMENT '趟号(分页续拉同一趟共用)',
+  scope_bill varchar(40) DEFAULT NULL COMMENT '本趟派发的单(空=按批扫所有在册单)',
+  status int DEFAULT '0' COMMENT '趟态 0拉取中(超时停在半路) 1走完',
+  cursor_bill varchar(40) DEFAULT NULL COMMENT '分页断点：续拉从这一单往后接着拉',
+  page_size int DEFAULT NULL COMMENT '每页拉几单(按批处理走)',
+  result_text varchar(255) DEFAULT NULL COMMENT '整趟结果；整趟跳空就写一个字 无',
+  sent_rows int DEFAULT '0' COMMENT '本趟真发出条数',
+  fail_rows int DEFAULT '0' COMMENT '本趟发不顺条数',
+  return_rows int DEFAULT '0' COMMENT '本趟带退件后续的条数',
+  note varchar(500) DEFAULT NULL COMMENT '超时停半/续拉/退件后续等留一笔',
+  del_flag int DEFAULT '0' COMMENT '删除标记 0正常 1删除',
+  create_by varchar(64) DEFAULT NULL COMMENT '创建者',
+  create_time datetime DEFAULT NULL COMMENT '创建时间',
+  update_by varchar(64) DEFAULT NULL COMMENT '更新者',
+  update_time datetime DEFAULT NULL COMMENT '更新时间',
+  remark varchar(500) DEFAULT NULL COMMENT '备注',
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_arr_run_no (run_no)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='提醒派发趟次(分页续拉)';
+
+-- 提醒提前量判据种子：提前 3 天；判据只在注册那刻誊一次，改了不追老册。
+INSERT IGNORE INTO t_heri_arr_rule (id, rule_code, rule_name, lead_days, eff_start, eff_end, priority, status, del_flag, create_by, create_time)
+VALUES (1, 'AR01', '到港滞期提醒：提前 3 天（在用行）', 3, '2020-01-01 00:00:00', '2099-12-31 23:59:59', 10, 0, 0, 'seed', NOW());

@@ -257,3 +257,95 @@ CREATE TABLE IF NOT EXISTS t_heri_del_gate (
 );
 
 CREATE INDEX idx_del_gate_bill ON t_heri_del_gate (bill_no, round_no, gate_no);
+
+-- ============================================================================
+-- 到港与滞期提醒排期：提前量港里判据说了算（空/负/大数按一日）；同单多条只发
+-- “改定得最晚、到口最近”那一条；日子往前挪只动还没发的；发不顺跳过别堵后头；
+-- 册上没条目整趟跳空写“无”；按批分页拉，超时留笔、续时接着拉。
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS t_heri_arr_rule (
+  id BIGINT NOT NULL,
+  rule_code VARCHAR(32),
+  rule_name VARCHAR(64),
+  lead_days INT,
+  eff_start DATETIME,
+  eff_end DATETIME,
+  priority INT,
+  status INT,
+  del_flag INT DEFAULT 0,
+  create_by VARCHAR(64),
+  create_time DATETIME,
+  update_by VARCHAR(64),
+  update_time DATETIME,
+  remark VARCHAR(500),
+  PRIMARY KEY (id)
+);
+
+CREATE TABLE IF NOT EXISTS t_heri_arr_bill (
+  id BIGINT NOT NULL,
+  bill_no VARCHAR(40),
+  ship_name VARCHAR(128),
+  rule_code VARCHAR(32),
+  lead_days INT,
+  status INT DEFAULT 0,
+  total_rows INT DEFAULT 0,
+  sent_rows INT DEFAULT 0,
+  fail_rows INT DEFAULT 0,
+  return_rows INT DEFAULT 0,
+  del_flag INT DEFAULT 0,
+  create_by VARCHAR(64),
+  create_time DATETIME,
+  update_by VARCHAR(64),
+  update_time DATETIME,
+  remark VARCHAR(500),
+  PRIMARY KEY (id),
+  CONSTRAINT uk_arr_bill_no UNIQUE (bill_no)
+);
+
+CREATE TABLE IF NOT EXISTS t_heri_arr_row (
+  id BIGINT NOT NULL,
+  bill_no VARCHAR(40),
+  item_no VARCHAR(64),
+  due_at DATETIME,
+  remind_at DATETIME,
+  lead_days INT,
+  revised_at DATETIME,
+  notify_type VARCHAR(128),
+  amount DECIMAL(14,2),
+  ship_name VARCHAR(128),
+  status INT,
+  send_time DATETIME,
+  fail_reason VARCHAR(255),
+  after_return INT DEFAULT 0,
+  del_flag INT DEFAULT 0,
+  create_by VARCHAR(64),
+  create_time DATETIME,
+  update_by VARCHAR(64),
+  update_time DATETIME,
+  remark VARCHAR(500),
+  PRIMARY KEY (id),
+  CONSTRAINT uk_arr_row_no UNIQUE (bill_no, item_no)
+);
+
+CREATE TABLE IF NOT EXISTS t_heri_arr_run (
+  id BIGINT NOT NULL,
+  run_no VARCHAR(40),
+  scope_bill VARCHAR(40),
+  status INT DEFAULT 0,
+  cursor_bill VARCHAR(40),
+  page_size INT,
+  result_text VARCHAR(255),
+  sent_rows INT DEFAULT 0,
+  fail_rows INT DEFAULT 0,
+  return_rows INT DEFAULT 0,
+  note VARCHAR(500),
+  del_flag INT DEFAULT 0,
+  create_by VARCHAR(64),
+  create_time DATETIME,
+  update_by VARCHAR(64),
+  update_time DATETIME,
+  remark VARCHAR(500),
+  PRIMARY KEY (id),
+  CONSTRAINT uk_arr_run_no UNIQUE (run_no)
+);
